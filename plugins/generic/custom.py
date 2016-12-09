@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Copyright (c) 2006-2015 sqlmap developers (http://sqlmap.org/)
+Copyright (c) 2006-2016 sqlmap developers (http://sqlmap.org/)
 See the file 'doc/COPYING' for copying permission
 """
 
@@ -17,6 +17,7 @@ from lib.core.data import conf
 from lib.core.data import logger
 from lib.core.dicts import SQL_STATEMENTS
 from lib.core.enums import AUTOCOMPLETE_TYPE
+from lib.core.exception import SqlmapNoneDataException
 from lib.core.settings import NULL
 from lib.core.settings import PARAMETER_SPLITTING_REGEX
 from lib.core.shell import autoCompletion
@@ -35,38 +36,42 @@ class Custom:
         sqlType = None
         query = query.rstrip(';')
 
-        for sqlTitle, sqlStatements in SQL_STATEMENTS.items():
-            for sqlStatement in sqlStatements:
-                if query.lower().startswith(sqlStatement):
-                    sqlType = sqlTitle
-                    break
+        try:
+            for sqlTitle, sqlStatements in SQL_STATEMENTS.items():
+                for sqlStatement in sqlStatements:
+                    if query.lower().startswith(sqlStatement):
+                        sqlType = sqlTitle
+                        break
 
-        if not any(_ in query.upper() for _ in ("OPENROWSET", "INTO")) and (not sqlType or "SELECT" in sqlType):
-            infoMsg = "fetching %s query output: '%s'" % (sqlType if sqlType is not None else "SQL", query)
-            logger.info(infoMsg)
+            if not any(_ in query.upper() for _ in ("OPENROWSET", "INTO")) and (not sqlType or "SELECT" in sqlType):
+                infoMsg = "fetching %s query output: '%s'" % (sqlType if sqlType is not None else "SQL", query)
+                logger.info(infoMsg)
 
-            output = inject.getValue(query, fromUser=True)
+                output = inject.getValue(query, fromUser=True)
 
-            return output
-        elif not isStackingAvailable() and not conf.direct:
-                warnMsg = "execution of custom SQL queries is only "
-                warnMsg += "available when stacked queries are supported"
-                logger.warn(warnMsg)
+                return output
+            elif not isStackingAvailable() and not conf.direct:
+                    warnMsg = "execution of custom SQL queries is only "
+                    warnMsg += "available when stacked queries are supported"
+                    logger.warn(warnMsg)
 
-                return None
-        else:
-            if sqlType:
-                debugMsg = "executing %s query: '%s'" % (sqlType if sqlType is not None else "SQL", query)
+                    return None
             else:
-                debugMsg = "executing unknown SQL type query: '%s'" % query
-            logger.debug(debugMsg)
+                if sqlType:
+                    debugMsg = "executing %s query: '%s'" % (sqlType if sqlType is not None else "SQL", query)
+                else:
+                    debugMsg = "executing unknown SQL type query: '%s'" % query
+                logger.debug(debugMsg)
 
-            inject.goStacked(query)
+                inject.goStacked(query)
 
-            debugMsg = "done"
-            logger.debug(debugMsg)
+                debugMsg = "done"
+                logger.debug(debugMsg)
 
-            output = NULL
+                output = NULL
+
+        except SqlmapNoneDataException, ex:
+            logger.warn(ex)
 
         return output
 
@@ -120,9 +125,12 @@ class Custom:
             if not sfile:
                 continue
 
-            query = getSQLSnippet(Backend.getDbms(), sfile)
+            snippet = getSQLSnippet(Backend.getDbms(), sfile)
 
-            infoMsg = "executing SQL statement%s from file '%s'" % ("s" if ";" in query else "", sfile)
-            logger.info(infoMsg)
-
-            conf.dumper.query(query, self.sqlQuery(query))
+            if snippet and all(query.strip().upper().startswith("SELECT") for query in filter(None, snippet.split(';' if ';' in snippet else '\n'))):
+                for query in filter(None, snippet.split(';' if ';' in snippet else '\n')):
+                    query = query.strip()
+                    if query:
+                        conf.dumper.query(query, self.sqlQuery(query))
+            else:
+                conf.dumper.query(snippet, self.sqlQuery(snippet))
